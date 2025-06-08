@@ -1,8 +1,8 @@
-# model.py (Version 10.0 - Normalization-Aware)
+# model.py (Version 11.0 - Neural Network with ReLU)
 import math
 
 def get_features(days, miles, receipts):
-    """Calculates raw, unscaled features."""
+    # This function remains the same.
     features = {}
     features['days'] = float(days)
     features['miles'] = float(miles)
@@ -24,7 +24,6 @@ def get_features(days, miles, receipts):
     return features
 
 def normalize_features(features, scaling_params):
-    """Applies Min-Max scaling to a feature set."""
     normalized = {}
     for name, value in features.items():
         min_val = scaling_params[name]['min']
@@ -32,13 +31,34 @@ def normalize_features(features, scaling_params):
         if (max_val - min_val) > 0:
             normalized[name] = (value - min_val) / (max_val - min_val)
         else:
-            normalized[name] = 0 # Feature is constant, scale to 0
+            normalized[name] = 0.0
     return normalized
 
+def relu(x):
+    """The Rectified Linear Unit activation function."""
+    return max(0, x)
+
 def predict(features, weights):
-    """Calculates a prediction from a set of (already normalized) features."""
-    prediction = 0.0
-    for name, value in features.items():
-        if name in weights:
-            prediction += value * weights[name]
-    return max(0, prediction)
+    """
+    Predicts using a simple two-layer neural network structure.
+    features -> hidden_layer -> ReLU -> output
+    """
+    # --- Hidden Layer Calculation ---
+    hidden_layer_values = [0.0] * weights['hidden_layer_size']
+    for i in range(weights['hidden_layer_size']):
+        # Calculate the value for each "neuron" in the hidden layer
+        neuron_value = 0.0
+        for feature_name, feature_value in features.items():
+            # Each neuron has its own set of weights for each input feature
+            neuron_value += feature_value * weights['w1'][feature_name][i]
+
+        # Apply the ReLU activation function
+        hidden_layer_values[i] = relu(neuron_value)
+
+    # --- Output Layer Calculation ---
+    output = 0.0
+    for i in range(weights['hidden_layer_size']):
+        # The final output is a weighted sum of the activated hidden layer values
+        output += hidden_layer_values[i] * weights['w2'][i]
+
+    return max(0, output)

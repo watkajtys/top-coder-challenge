@@ -1,112 +1,114 @@
-# trainer.py (Version 10.0 - Gradient Descent with Normalization)
-import json
-import math
-import sys
-from model import get_features, normalize_features, predict
+# trainer.py (Version 12.0 - Gradient Descent with INPUT and OUTPUT Normalization)
+import json, random, math, sys
+from model import get_features, normalize_features, predict, relu
 
 if __name__ == "__main__":
     # --- 1. Load Data ---
     with open('public_cases.json', 'r') as f:
         data = json.load(f)
 
-    # --- 2. Feature Analysis: Calculate Scaling Parameters ---
-    print("Step 1: Analyzing data to determine feature scaling parameters...")
-
-    # Get a list of all feature names
-    feature_names = get_features(1, 1, 1).keys()
+    # --- 2. Analyze & Normalize INPUTS (Features) ---
+    print("Step 1: Normalizing inputs...")
+    feature_names = get_features(1,1,1).keys()
     scaling_params = {name: {'min': float('inf'), 'max': float('-inf')} for name in feature_names}
-
     for case in data:
-        inputs = case['input']
-        features = get_features(inputs['trip_duration_days'],
-                                inputs['miles_traveled'],
-                                inputs['total_receipts_amount'])
+        features = get_features(case['input']['trip_duration_days'], case['input']['miles_traveled'], case['input']['total_receipts_amount'])
         for name, value in features.items():
-            if value < scaling_params[name]['min']:
-                scaling_params[name]['min'] = value
-            if value > scaling_params[name]['max']:
-                scaling_params[name]['max'] = value
+            scaling_params[name]['min'] = min(scaling_params[name]['min'], value)
+            scaling_params[name]['max'] = max(scaling_params[name]['max'], value)
 
-    print("Feature scaling parameters calculated.")
+    # --- 3. Analyze & Normalize OUTPUTS (Targets) ---
+    print("Step 2: Normalizing outputs...")
+    output_min = min(c['expected_output'] for c in data)
+    output_max = max(c['expected_output'] for c in data)
+    output_scaling_params = {'min': output_min, 'max': output_max}
+    output_range = output_max - output_min
 
-    # --- 3. Prepare Data for Training ---
-    # Now, process all data into normalized feature sets
+    # --- 4. Prepare Full Training Set with Scaled Data ---
     training_set = []
     for case in data:
-        inputs = case['input']
-        raw_features = get_features(inputs['trip_duration_days'],
-                                    inputs['miles_traveled'],
-                                    inputs['total_receipts_amount'])
+        raw_features = get_features(case['input']['trip_duration_days'], case['input']['miles_traveled'], case['input']['total_receipts_amount'])
         normalized_features = normalize_features(raw_features, scaling_params)
-        training_set.append({
-            'features': normalized_features,
-            'expected': case['expected_output']
-        })
 
-    # --- 4. Initialize Model and Hyperparameters ---
-    weights = {name: 0.0 for name in feature_names}
-    LEARNING_RATE = 0.05  # We can use a MUCH larger learning rate now
-    NUM_EPOCHS = 20000
+        # Scale the expected output to a 0-1 range
+        scaled_expected = (case['expected_output'] - output_min) / output_range if output_range > 0 else 0
 
-    print(f"\nStep 2: Starting training with Learning Rate: {LEARNING_RATE}")
+        training_set.append({'features': normalized_features, 'expected': scaled_expected})
+    print("Data preparation complete.")
 
-    # --- 5. The Training Loop ---
+    # --- 5. Initialize Model & Hyperparameters ---
+    HIDDEN_LAYER_SIZE = 16 # A slightly larger hidden layer for more capacity
+    weights = {
+        'hidden_layer_size': HIDDEN_LAYER_SIZE,
+        'w1': {fname: [random.uniform(-0.1, 0.1) for _ in range(HIDDEN_LAYER_SIZE)] for fname in feature_names},
+        'w2': [random.uniform(-0.1, 0.1) for _ in range(HIDDEN_LAYER_SIZE)]
+    }
+
+    LEARNING_RATE = 0.1 # We can use a much healthier learning rate now
+    NUM_EPOCHS = 30000
+
+    print(f"\nStep 3: Starting training... (Learning Rate: {LEARNING_RATE}, Epochs: {NUM_EPOCHS})")
+
+    # --- 6. The Training Loop ---
     for epoch in range(NUM_EPOCHS):
-        total_error = 0.0
-        gradients = {name: 0.0 for name in weights.keys()}
+        total_squared_error = 0.0
 
         for item in training_set:
             features = item['features']
-            expected = item['expected']
+            scaled_expected = item['expected']
 
-            prediction = predict(features, weights)
-            error = prediction - expected
-            total_error += error ** 2
+            # Forward Pass
+            hidden_inputs = [sum(features[fn] * weights['w1'][fn][i] for fn in feature_names) for i in range(HIDDEN_LAYER_SIZE)]
+            hidden_outputs = [relu(x) for x in hidden_inputs]
+            scaled_prediction = sum(hidden_outputs[i] * weights['w2'][i] for i in range(HIDDEN_LAYER_SIZE))
 
-            for name, value in features.items():
-                gradients[name] += error * value
+            # Backpropagation
+            error = scaled_prediction - scaled_expected
+            total_squared_error += error ** 2
 
-        num_cases = len(training_set)
-        for name in weights.keys():
-            avg_gradient = gradients[name] / num_cases
-            weights[name] -= LEARNING_RATE * avg_gradient
+            grad_w2 = [hidden_outputs[i] * error for i in range(HIDDEN_LAYER_SIZE)]
+
+            grad_w1_deltas = [(weights['w2'][i] * error) for i in range(HIDDEN_LAYER_SIZE)]
+
+            for i in range(HIDDEN_LAYER_SIZE):
+                if hidden_inputs[i] > 0: # ReLU derivative
+                    weights['w2'][i] -= LEARNING_RATE * grad_w2[i]
+                    for fn in feature_names:
+                        weights['w1'][fn][i] -= LEARNING_RATE * features[fn] * grad_w1_deltas[i]
 
         if (epoch + 1) % 1000 == 0:
-            rmse = math.sqrt(total_error / num_cases)
-            print(f"Epoch {epoch+1}/{NUM_EPOCHS} | RMSE: {rmse:.4f}")
+            # Note: This RMSE is on the SCALED data (0-1 range), so it will be very small.
+            scaled_rmse = math.sqrt(total_squared_error / len(training_set))
+            # We convert it back to dollar error for an intuitive progress report.
+            dollar_rmse = scaled_rmse * output_range
+            print(f"Epoch {epoch+1}/{NUM_EPOCHS} | Dollar RMSE: ${dollar_rmse:.2f}")
 
     print("\n🏁 Training Complete.")
 
-    # --- 6. Generate the Final Submission Script ---
-    with open('model.py', 'r') as f:
-        model_code = f.read()
-
+    # --- 7. Generate Final Submission Script ---
+    with open('model.py', 'r') as f: model_code = f.read()
     main_block = f"""
 if __name__ == "__main__":
     import sys
-    # --- OPTIMIZED WEIGHTS AND SCALING PARAMS (Generated by trainer.py) ---
+    # --- OPTIMIZED WEIGHTS AND SCALING PARAMS ---
     weights = {json.dumps(weights, indent=4)}
     scaling_params = {json.dumps(scaling_params, indent=4)}
+    output_scaling_params = {json.dumps(output_scaling_params, indent=4)}
 
-    if len(sys.argv) != 4:
-        sys.exit(1)
+    if len(sys.argv) != 4: sys.exit(1)
     try:
-        duration = int(sys.argv[1])
-        miles = float(sys.argv[2])
-        receipts = float(sys.argv[3])
+        raw_features = get_features(int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]))
+        norm_features = normalize_features(raw_features, scaling_params)
 
-        # The final script must perform the same feature engineering AND normalization
-        raw_features = get_features(duration, miles, receipts)
-        normalized_features = normalize_features(raw_features, scaling_params)
+        # Predict the SCALED value
+        scaled_result = predict(norm_features, weights)
 
-        result = predict(normalized_features, weights)
-        print(f"{{result:.2f}}")
-    except Exception:
-        print(0.0)
-        sys.exit(0)
+        # De-normalize the result back to a dollar amount
+        output_range = output_scaling_params['max'] - output_scaling_params['min']
+        final_result = (scaled_result * output_range) + output_scaling_params['min']
+
+        print(f"{{final_result:.2f}}")
+    except Exception: print(0.0); sys.exit(0)
 """
-    final_code = model_code + main_block
-    with open('solution.py', 'w') as f:
-        f.write(final_code)
-
-    print(f"✅ Generated final 'solution.py' with learned weights and scaling.")
+    with open('solution.py', 'w') as f: f.write(model_code + main_block)
+    print("✅ Generated final 'solution.py' with learned weights and scaling.")
